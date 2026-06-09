@@ -1,0 +1,8 @@
+{
+  "name": "afterglow-memory",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.ts",
+  "description": "Afterglow Companion System plugin for OpenClaw pre-message recall and local memory ingestion.",
+  "private": false
+}

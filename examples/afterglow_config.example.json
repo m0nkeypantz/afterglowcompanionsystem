@@ -1,0 +1,28 @@
+{
+  "companion_name": "Companion",
+  "user_name": "User",
+  "timezone": "America/New_York",
+  "models": {
+    "pulse": "openrouter/auto",
+    "diary": "openrouter/auto",
+    "reflection": "openrouter/auto",
+    "recall": "local_sqlite_fts"
+  },
+  "model_runner": {
+    "command_template": "",
+    "timeout_seconds": 120,
+    "notes": "Optional. Template fields: {model}, {session_key}, {prompt_path}, {output_path}. If empty, pulse writes prompt files and fallback diaries without model calls."
+  },
+  "pulse": {
+    "enabled": true,
+    "interval_minutes": 72,
+    "diary_on_pulse": true,
+    "outreach_enabled": false,
+    "quiet_hours_start": 22,
+    "quiet_hours_end": 7
+  },
+  "ui": {
+    "host": "127.0.0.1",
+    "port": 8765
+  }
+}

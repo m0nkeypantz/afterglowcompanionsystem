@@ -1,0 +1,34 @@
+{
+  "plugins": {
+    "slots": {
+      "memory": "none"
+    },
+    "entries": {
+      "memory-core": {
+        "enabled": false
+      },
+      "memory-wiki": {
+        "enabled": false
+      },
+      "afterglow-memory": {
+        "enabled": true
+      }
+    }
+  },
+  "tools": {
+    "deny": [
+      "memory_*",
+      "wiki_*",
+      "brain__*"
+    ]
+  },
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-memory": {
+          "enabled": false
+        }
+      }
+    }
+  }
+}
