@@ -2,6 +2,8 @@
 
 Afterglow is a companion memory, recall, emotional state, diary, pulse, and OpenClaw plugin suite for free-acting AI companions.
 
+[Support development on Ko-fi](https://ko-fi.com/m0nkeypantz)
+
 It is designed as a blank-state public package. It does not ship private memories, private companion personality, credentials, user names, phone bridges, or live deployment paths.
 
 ## Purpose
