@@ -1,6 +1,6 @@
 # Afterglow Companion System
 
-Afterglow is a portable memory, recall, emotional state, diary, pulse, and OpenClaw plugin suite for companion agents.
+Afterglow is a companion memory, recall, emotional state, diary, pulse, and OpenClaw plugin suite for companion agents.
 
 It is designed as a blank-state public package. It does not ship private memories, private companion personality, credentials, user names, phone bridges, or live deployment paths.
 
