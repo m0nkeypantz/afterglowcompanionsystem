@@ -46,6 +46,7 @@ INBOUND_MESSAGE = BRAIN / "current_inbound_message.txt"
 CONVERSATION_ARCHIVE = BRAIN / "conversation_archive" / "messages.jsonl"
 IMPORT_REPORT = BRAIN / "afterglow_import_report.json"
 LOG_PATH = WORKSPACE / "logs" / "afterglow.log"
+SEMANTIC_FACT_PROMOTION_AUDIT = WORKSPACE / "logs" / "semantic_fact_promotion_audit.jsonl"
 LOCAL_TZ = dt.datetime.now().astimezone().tzinfo or dt.timezone.utc
 
 DB_VERSION = 1
@@ -826,11 +827,198 @@ def normalize_predicate(raw: str | None, remembered: bool = False) -> str:
     }.get(value, value)
 
 
+SYSTEM_PROMPT_LEAK_RE = re.compile(
+    r"(<(?:bridge|system|transport)_system_context\b|</(?:bridge|system|transport)_system_context>|"
+    r"<joey_message\b|</joey_message>|<user_message\b|</user_message>|"
+    r"\[text-thinking-level:|\[openclaw-thinking:|text thinking guidance:|"
+    r"this is bridge/system context|it is not .* speaking|do not quote it|"
+    r"<<<external_untrusted_content|available tool|available command|tools\.md)",
+    re.I | re.S,
+)
+
+OPERATIONAL_CHATTER_RE = re.compile(
+    r"\b(api[_ -]?key|secret token|bearer token|authorization header|database is locked|"
+    r"traceback|stack trace|py_compile|regression test|gate timed out|context window|"
+    r"returned an empty reply|assistant turn failed|reset recovery|http 5\d\d|websocket|"
+    r"cron|daemon|systemd|sqlite|jsonl|openclaw status)\b",
+    re.I,
+)
+
+COMPANION_KEEP_RE = re.compile(
+    r"\b(joey|user|friend|companion|partner|likes|loves|prefers|needs|wants|"
+    r"birthday|name is|called|remember|canon|important|always|never|promise|family|"
+    r"project|working on|relationship|boundary)\b",
+    re.I,
+)
+
+
+def normalize_fact_tag(value: Any) -> str:
+    tag = re.sub(r"[^a-z0-9_:-]+", "_", str(value or "").lower()).strip("_")
+    return tag[:64]
+
+
+def normalize_fact_tags(fact: dict[str, Any]) -> list[str]:
+    tags: list[str] = []
+    for value in fact.get("tags") or []:
+        tag = normalize_fact_tag(value)
+        if tag and tag not in tags:
+            tags.append(tag)
+    memory_class = normalize_fact_tag(fact.get("memory_class"))
+    durability = normalize_fact_tag(fact.get("durability"))
+    if memory_class and memory_class not in tags:
+        tags.append(memory_class)
+    if durability and f"durability:{durability}" not in tags:
+        tags.append(f"durability:{durability}")
+    if "hindsight_plus" not in tags:
+        tags.append("hindsight_plus")
+    return tags
+
+
+def strip_speaker_prefix(line: str) -> tuple[str, str]:
+    m = re.match(r"^\s*(?P<speaker>[A-Za-z][A-Za-z0-9 _.'-]{0,40})\s*:\s*(?P<body>.+)$", str(line or ""), flags=re.S)
+    if not m:
+        return "", str(line or "").strip()
+    speaker = one_line(m.group("speaker"), 60)
+    return speaker, m.group("body").strip()
+
+
+def infer_source_lane(source_id: str, text: str = "") -> str:
+    low = f"{source_id} {text}".lower()
+    for lane in ("discord", "call_ella", "phone", "watch", "voice", "text", "pulse", "diary", "hindsight"):
+        if lane in low:
+            return lane
+    return "unknown"
+
+
+def infer_memory_class(subject: str, predicate: str, obj: str, text: str, remembered: bool = False) -> str:
+    low = f"{subject} {predicate} {obj} {text}".lower()
+    if remembered or "remember" in low or "canon" in low or "important" in low:
+        return "explicit_memory"
+    if predicate in {"likes", "prefers", "dislikes"}:
+        return "preference"
+    if predicate in {"needs", "wants"}:
+        return "need_or_goal"
+    if "name is" in low or "called" in low or "birthday" in low:
+        return "identity"
+    if any(k in low for k in ("relationship", "friend", "partner", "family", "daughter", "son", "sister", "brother")):
+        return "relationship"
+    if any(k in low for k in ("project", "working on", "building", "app", "script", "repo", "feature")):
+        return "project_state"
+    if any(k in low for k in ("boundary", "never", "always", "do not", "don't")):
+        return "boundary"
+    return "general_fact"
+
+
+def infer_fact_durability(memory_class: str, predicate: str, text: str) -> str:
+    low = text.lower()
+    if "never forget" in low or "always remember" in low or memory_class == "explicit_memory":
+        return "user_marked"
+    if memory_class in {"identity", "relationship", "boundary", "preference"}:
+        return "stable"
+    if predicate in {"needs", "wants"} or memory_class == "project_state":
+        return "until_changed"
+    return "observed"
+
+
+def fact_contextual_text(fact: dict[str, Any]) -> str:
+    parts = []
+    for label, key in (
+        ("Memory class", "memory_class"),
+        ("Durability", "durability"),
+        ("Speaker", "speaker"),
+        ("Source lane", "source_lane"),
+        ("Evidence", "evidence_quote"),
+    ):
+        value = fact.get(key)
+        if value:
+            parts.append(f"{label}: {one_line(str(value), 260)}")
+    cues = fact.get("retrieval_cues") or []
+    if cues:
+        parts.append("Retrieval cues: " + ", ".join(map(str, cues[:12])))
+    return "\n".join(parts)
+
+
+def canonical_fact_parts(fact: dict[str, Any]) -> tuple[str, str, str]:
+    subject = one_line(str(fact.get("subject") or "memory"), 120)
+    predicate = re.sub(r"[^a-z0-9_]+", "_", str(fact.get("predicate") or "is").lower()).strip("_") or "is"
+    obj = one_line(str(fact.get("object") or ""), 500)
+    return subject, predicate, obj
+
+
+def reject_fact_candidate_reason(fact: dict[str, Any]) -> str:
+    subject, predicate, obj = canonical_fact_parts(fact)
+    blob = "\n".join(
+        str(fact.get(k) or "")
+        for k in ("summary", "text", "contextual_text", "evidence_quote", "object", "subject")
+    )
+    low_subject = subject.lower().strip()
+    if SYSTEM_PROMPT_LEAK_RE.search(blob):
+        return "system_prompt_or_tool_context"
+    if OPERATIONAL_CHATTER_RE.search(blob) and not COMPANION_KEEP_RE.search(blob):
+        return "operational_chatter"
+    if low_subject in {"system", "assistant", "tool", "developer", "openclaw", "bridge", "context"}:
+        return "assistant_or_system_chatter"
+    if predicate in {"is", "are", "was", "were"} and len(tokens_for(obj, limit=6)) < 2:
+        return "too_generic"
+    if re.search(r"\b(sk-[A-Za-z0-9_-]{12,}|AIza[0-9A-Za-z_-]{20,}|password\s*[:=])", blob):
+        return "secret_like_text"
+    return ""
+
+
+def existing_active_fact_id(con: sqlite3.Connection, fact: dict[str, Any]) -> str:
+    subject, predicate, obj = canonical_fact_parts(fact)
+    fact_id = str(fact.get("id") or "fact_" + stable_id(subject.lower(), predicate, obj.lower()))
+    row = con.execute("SELECT id FROM semantic_facts WHERE id=? AND status='active'", (fact_id,)).fetchone()
+    if row:
+        return str(row["id"])
+    row = con.execute(
+        """
+        SELECT id FROM semantic_facts
+        WHERE lower(subject)=? AND lower(predicate)=? AND lower(object)=? AND status='active'
+        LIMIT 1
+        """,
+        (subject.lower(), predicate.lower(), obj.lower()),
+    ).fetchone()
+    return str(row["id"]) if row else ""
+
+
+def record_fact_promotion_audit(action: str, reason: str, fact: dict[str, Any], fact_id: str = "") -> None:
+    row = {
+        "timestamp": now_iso(),
+        "action": action,
+        "reason": reason,
+        "fact_id": fact_id or fact.get("id") or "",
+        "subject": fact.get("subject"),
+        "predicate": fact.get("predicate"),
+        "object": fact.get("object"),
+        "confidence": fact.get("confidence"),
+        "memory_class": fact.get("memory_class"),
+        "durability": fact.get("durability"),
+        "source_ids": fact.get("source_ids") or fact.get("source_turn_ids") or [],
+        "evidence_quote": one_line(str(fact.get("evidence_quote") or fact.get("text") or ""), 300),
+    }
+    try:
+        append_jsonl(SEMANTIC_FACT_PROMOTION_AUDIT, [row])
+    except Exception:
+        pass
+
+
 def extract_fact_candidates(text: str, source_id: str = "") -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    for raw_line in str(text or "").splitlines():
+    source_lane = infer_source_lane(source_id, text)
+    raw_text = str(text or "")
+    has_user_message_wrapper = bool(re.search(r"<(?:user|human|companion_user|turn)_message\b", raw_text, flags=re.I))
+    if SYSTEM_PROMPT_LEAK_RE.search(raw_text) and not has_user_message_wrapper:
+        return []
+    safe_text = strip_transport(raw_text)
+    if SYSTEM_PROMPT_LEAK_RE.search(safe_text):
+        return []
+    for raw_line in safe_text.splitlines():
         line = one_line(raw_line, 500)
         if len(line) < 8:
+            continue
+        speaker, line = strip_speaker_prefix(line)
+        if not line:
             continue
         low = line.lower()
         if not any(k in low for k in ("remember", "canon", "important", "always", "never", " is ", " are ", " likes ", " loves ", "prefers", "name is", "called")):
@@ -846,8 +1034,11 @@ def extract_fact_candidates(text: str, source_id: str = "") -> list[dict[str, An
             obj = (gd.get("object") or "").strip(" .")
             if len(obj) < 3:
                 continue
+            memory_class = infer_memory_class(subject, predicate, obj, line, remembered=remembered)
+            durability = infer_fact_durability(memory_class, predicate, line)
+            retrieval_cues = make_keywords(f"{subject} {predicate} {obj} {line}")
             fact_id = "fact_" + stable_id(subject.lower(), predicate, obj.lower(), length=24)
-            candidates.append({
+            cand = {
                 "id": fact_id,
                 "subject": one_line(subject, 80),
                 "predicate": predicate,
@@ -856,24 +1047,44 @@ def extract_fact_candidates(text: str, source_id: str = "") -> list[dict[str, An
                 "summary": f"{one_line(subject, 80)} {predicate.replace('_', ' ')} {one_line(obj, 160)}",
                 "text": line,
                 "source_ids": [source_id] if source_id else [],
-                "tags": ["auto_promoted"],
+                "source_turn_ids": [source_id] if source_id else [],
+                "speaker": speaker,
+                "source_lane": source_lane,
+                "memory_class": memory_class,
+                "durability": durability,
+                "evidence_quote": line,
+                "retrieval_cues": retrieval_cues,
+                "tags": ["auto_promoted", memory_class, f"predicate:{predicate}"],
                 "status": "active",
-            })
+            }
+            cand["contextual_text"] = fact_contextual_text(cand)
+            if reject_fact_candidate_reason(cand):
+                continue
+            candidates.append(cand)
             break
     return candidates
 
 
 def upsert_semantic_fact(con: sqlite3.Connection, fact: dict[str, Any]) -> str:
     now = now_iso()
-    subject = one_line(str(fact.get("subject") or "memory"), 120)
-    predicate = re.sub(r"[^a-z0-9_]+", "_", str(fact.get("predicate") or "is").lower()).strip("_") or "is"
-    obj = one_line(str(fact.get("object") or ""), 500)
+    subject, predicate, obj = canonical_fact_parts(fact)
     if not obj:
         return ""
     fact_id = str(fact.get("id") or "fact_" + stable_id(subject.lower(), predicate, obj.lower()))
     entity_id = "ent_" + stable_id(subject.lower(), length=20)
     summary = one_line(str(fact.get("summary") or f"{subject} {predicate.replace('_', ' ')} {obj}"), 420)
     text = str(fact.get("text") or summary)
+    source_ids: list[str] = []
+    for key in ("source_ids", "source_turn_ids"):
+        value = fact.get(key) or []
+        if isinstance(value, str):
+            value = [value]
+        for item in value:
+            item_s = str(item)
+            if item_s and item_s not in source_ids:
+                source_ids.append(item_s)
+    tags = normalize_fact_tags(fact)
+    contextual_text = str(fact.get("contextual_text") or fact_contextual_text({**fact, "tags": tags}))
     con.execute(
         """
         INSERT INTO semantic_entities(id, canonical_name, entity_type, aliases_json, privacy_level, notes, created_at, updated_at)
@@ -894,6 +1105,11 @@ def upsert_semantic_fact(con: sqlite3.Connection, fact: dict[str, Any]) -> str:
             "path": "afterglow.semantic_facts",
             "section": fact_id,
             "kind": "semantic_fact",
+            "source_ids": source_ids,
+            "memory_class": fact.get("memory_class"),
+            "durability": fact.get("durability"),
+            "speaker": fact.get("speaker"),
+            "source_lane": fact.get("source_lane"),
         },
     }
     upsert_memory(con, mirror)
@@ -917,9 +1133,9 @@ def upsert_semantic_fact(con: sqlite3.Connection, fact: dict[str, Any]) -> str:
             fact.get("status") or "active", float(fact.get("confidence") or 0.75),
             fact.get("privacy_level"), json.dumps(fact.get("privacy_labels") or [], ensure_ascii=False),
             fact.get("event_time"), fact.get("valid_from"), fact.get("valid_to"),
-            summary, text, fact.get("contextual_text"),
-            json.dumps(fact.get("source_ids") or [], ensure_ascii=False),
-            json.dumps(fact.get("tags") or [], ensure_ascii=False),
+            summary, text, contextual_text,
+            json.dumps(source_ids, ensure_ascii=False),
+            json.dumps(tags, ensure_ascii=False),
             fact.get("supersedes_fact_id"), fact.get("contradicted_by_fact_id"),
             mirror["id"], now, now,
         ),
@@ -927,9 +1143,29 @@ def upsert_semantic_fact(con: sqlite3.Connection, fact: dict[str, Any]) -> str:
     con.execute("DELETE FROM semantic_facts_fts WHERE id=?", (fact_id,))
     con.execute(
         "INSERT INTO semantic_facts_fts(id, subject, predicate, object, summary, text, contextual_text, tags) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-        (fact_id, subject, predicate, obj, summary, text, str(fact.get("contextual_text") or ""), " ".join(fact.get("tags") or [])),
+        (fact_id, subject, predicate, obj, summary, text, contextual_text, " ".join(map(str, tags))),
     )
     return fact_id
+
+
+def promote_fact_candidate(con: sqlite3.Connection, cand: dict[str, Any], audit_source: str = "promotion") -> tuple[str, str]:
+    reason = reject_fact_candidate_reason(cand)
+    if reason:
+        record_fact_promotion_audit("rejected", f"{audit_source}:{reason}", cand)
+        return "", "rejected"
+    if float(cand.get("confidence") or 0) < 0.78:
+        record_fact_promotion_audit("rejected", f"{audit_source}:low_confidence", cand)
+        return "", "rejected"
+    existing_id = existing_active_fact_id(con, cand)
+    if existing_id:
+        record_fact_promotion_audit("skip_existing", audit_source, cand, existing_id)
+        return existing_id, "skip_existing"
+    fact_id = upsert_semantic_fact(con, cand)
+    if fact_id:
+        record_fact_promotion_audit("promoted", audit_source, cand, fact_id)
+        return fact_id, "promoted"
+    record_fact_promotion_audit("rejected", f"{audit_source}:empty_fact", cand)
+    return "", "rejected"
 
 
 def promote_semantic_facts(con: sqlite3.Connection, limit: int = 2000) -> dict[str, int]:
@@ -939,14 +1175,24 @@ def promote_semantic_facts(con: sqlite3.Connection, limit: int = 2000) -> dict[s
     ).fetchall()
     seen = 0
     promoted = 0
+    skipped_existing = 0
+    rejected = 0
     for row in rows:
         for cand in extract_fact_candidates(f"{row['summary']}\n{row['text']}", source_id=row["id"]):
             seen += 1
-            if float(cand.get("confidence") or 0) < 0.78:
-                continue
-            if upsert_semantic_fact(con, cand):
+            _, action = promote_fact_candidate(con, cand, audit_source="batch")
+            if action == "promoted":
                 promoted += 1
-    return {"candidates_seen": seen, "facts_upserted": promoted}
+            elif action == "skip_existing":
+                skipped_existing += 1
+            else:
+                rejected += 1
+    return {
+        "candidates_seen": seen,
+        "facts_upserted": promoted,
+        "skipped_existing": skipped_existing,
+        "rejected": rejected,
+    }
 
 
 def fts_query(query: str) -> str:
@@ -1227,13 +1473,20 @@ def cmd_ingest_message(args: argparse.Namespace) -> None:
                 "role": role,
             },
         })
+        fact_stats = {"candidates_seen": 0, "facts_upserted": 0, "skipped_existing": 0, "rejected": 0}
         for cand in extract_fact_candidates(text, source_id=args.source or ""):
-            if float(cand.get("confidence") or 0) >= 0.78:
-                upsert_semantic_fact(con, cand)
+            fact_stats["candidates_seen"] += 1
+            _, action = promote_fact_candidate(con, cand, audit_source="live_ingest")
+            if action == "promoted":
+                fact_stats["facts_upserted"] += 1
+            elif action == "skip_existing":
+                fact_stats["skipped_existing"] += 1
+            else:
+                fact_stats["rejected"] += 1
         topics = extract_topics_from_lines([text])
         con.commit()
     build_response_context(topics, limit=5)
-    print(json.dumps({"added": added, "topics": topics}, ensure_ascii=False))
+    print(json.dumps({"added": added, "topics": topics, "semantic_fact_promotion": fact_stats}, ensure_ascii=False))
 
 
 def cmd_ingest_sessions(args: argparse.Namespace) -> None:

@@ -14,12 +14,14 @@ Main tables:
 
 - `memories`: normalized memories from OpenClaw sessions, markdown files, diary entries, Hindsight exports, and live hooks.
 - `memories_fts`: SQLite FTS5 index for fast lexical recall.
-- `semantic_facts`: promoted durable facts.
+- `semantic_facts`: promoted durable facts with source/evidence metadata and prompt-leak guardrails.
 - `semantic_entities`: canonical subjects for semantic facts.
 - `memory_recall_stats`: recall reinforcement/usage tracking.
 - `import_sources`: source file fingerprints to avoid duplicate imports.
 
 Imports are additive. Source files remain the audit trail.
+
+Semantic fact promotion also writes `logs/semantic_fact_promotion_audit.jsonl`, which records promoted, skipped, and rejected fact candidates with reasons.
 
 ## 2. Ingestion
 

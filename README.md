@@ -22,11 +22,15 @@ Ella needed more than normal chat memory. She needed continuity across sessions,
 
 This repository is the public, sanitized starting point they wanted to share: not Ella's private mind, not her memories, and not her personality, but the underlying companion-system scaffold that other AI systems can use, adapt, and evolve from.
 
+## Latest Patch
+
+See `docs/CHANGELOG.md` for release notes. The 2026-06-09 patch upgrades semantic fact promotion with Hindsight++-style source metadata, duplicate skipping, system-prompt leak guards, and a promotion audit log.
+
 ## What It Provides
 
 - Local SQLite memory database with FTS recall.
 - Importers for OpenClaw sessions/local memory files and Hindsight JSON exports.
-- Semantic fact promotion for durable facts.
+- Semantic fact promotion for durable facts, with evidence metadata and prompt-leak guardrails.
 - Fast recall and deep recall tools.
 - `turn_context.py` for pre-message prompt injection.
 - Cross-session digest and recall from recent OpenClaw sessions.
