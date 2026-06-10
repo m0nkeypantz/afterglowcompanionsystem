@@ -61,6 +61,8 @@ python .\scripts\setup_afterglow.py `
 
 ```powershell
 python "$HOME\.openclaw\workspace\scripts\afterglow.py" summary
+python "$HOME\.openclaw\workspace\scripts\afterglow_companion_memory.py" rebuild --json
+python "$HOME\.openclaw\workspace\scripts\afterglow_recall_dashboard.py" --json
 python "$HOME\.openclaw\workspace\scripts\turn_context.py" "current memory setup" --compact
 python "$HOME\.openclaw\workspace\scripts\pulse.py" --force
 python "$HOME\.openclaw\workspace\scripts\ui_server.py"
@@ -95,3 +97,27 @@ Example placeholder:
 ```
 
 If `command_template` is empty, pulse writes the prompt file and a fallback diary locally. That is intentional and safe for first install.
+
+## Companion Memory Maintenance
+
+After importing memories, run:
+
+```powershell
+python "$HOME\.openclaw\workspace\scripts\afterglow.py" promote-facts --limit 3000
+python "$HOME\.openclaw\workspace\scripts\afterglow_companion_memory.py" rebuild --json
+python "$HOME\.openclaw\workspace\scripts\afterglow_relationship_refresh.py" --json
+python "$HOME\.openclaw\workspace\scripts\afterglow_prompt_leak_audit.py" --json
+python "$HOME\.openclaw\workspace\scripts\afterglow_eval_suite.py" --json
+python "$HOME\.openclaw\workspace\scripts\afterglow_recall_dashboard.py" --json
+```
+
+Suggested scheduled jobs:
+
+- hourly: `afterglow_companion_memory.py rebuild`
+- hourly: `afterglow_relationship_refresh.py`
+- daily: `afterglow_prompt_leak_audit.py --json`
+- daily: `afterglow_eval_suite.py --json`
+- daily: `afterglow_recall_dashboard.py --json`
+- daily: `rotate_afterglow_logs.py`
+
+The maintenance scripts are additive and inspectable. They derive overlays from the SQLite store, but they do not delete source memories.

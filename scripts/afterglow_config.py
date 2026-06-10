@@ -35,6 +35,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "quiet_hours_start": 22,
         "quiet_hours_end": 7,
     },
+    "companion_memory": {
+        "enabled": True,
+        "observation_scan_limit": 6000,
+        "episode_days": 21,
+        "small_stuff_limit": 12,
+        "relationship_edge_days": 30,
+        "relationship_core_entities": [],
+        "custom_relationship_predicates": [],
+        "prompt_leak_quarantine": True,
+        "trace_recall": True,
+    },
     "ui": {
         "host": "127.0.0.1",
         "port": 8765,

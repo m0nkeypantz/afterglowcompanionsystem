@@ -14,6 +14,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -21,6 +22,12 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import afterglow  # noqa: E402
+
+try:
+    from afterglow_companion_memory import core_memory_blocks, record_recall_trace
+except Exception:  # pragma: no cover - context injection must keep working without overlay
+    core_memory_blocks = None  # type: ignore[assignment]
+    record_recall_trace = None  # type: ignore[assignment]
 
 
 OUTPUT_PATH = afterglow.BRAIN / "afterglow_prompt_recall.md"
@@ -165,7 +172,9 @@ def run_recent_diaries(compact: bool) -> str:
 
 def render(query: str, turn: dict, limit: int, compact: bool) -> str:
     refresh_emotional_state()
+    recall_started = time.perf_counter()
     results = afterglow.semantic_recall(query, limit=limit)
+    recall_elapsed_ms = (time.perf_counter() - recall_started) * 1000.0
     afterglow.build_response_context([query], limit=min(limit, 6))
     emotion_text = read_text(EMOTION_PATH, 5000)
     cross_session = run_cross_session(query, compact=compact)
@@ -209,6 +218,20 @@ def render(query: str, turn: dict, limit: int, compact: bool) -> str:
             )
             if not compact and item.get("source_path"):
                 lines.append(f"  source_path: {item.get('source_path')}")
+
+    if record_recall_trace:
+        try:
+            record_recall_trace(query, results, recall_elapsed_ms, mode="turn_context")
+        except Exception:
+            pass
+
+    if core_memory_blocks:
+        try:
+            companion_block = core_memory_blocks(query, limit=min(limit, 8))
+        except Exception as exc:
+            companion_block = f"## Companion Memory Overlay\n(unavailable: {exc})"
+        if companion_block:
+            lines.extend(["", companion_block])
 
     lines.extend(["", "## Cross-Session Context", cross_session])
     lines.extend(["", "## Recent Diaries", diaries])
