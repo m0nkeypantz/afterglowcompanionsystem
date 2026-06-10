@@ -1,6 +1,6 @@
 # Architecture
 
-Afterglow is split into six cooperating layers.
+Afterglow is split into seven cooperating layers.
 
 ## 1. Canonical Memory Store
 
@@ -41,6 +41,8 @@ Fast recall:
 ```text
 scripts/fast_memory_recall.py
 ```
+
+Fast recall also includes the optional companion-memory overlay when it has been built. That overlay surfaces observations, active episodes, small-stuff continuity, and recall traces without replacing canonical memories.
 
 Deep/manual recall:
 
@@ -101,3 +103,23 @@ The OpenClaw plugin calls it from `before_prompt_build` and prepends the result 
 Model calls for pulse/diary writing are optional and configured in `brain/afterglow_config.json`.
 
 If no model runner is configured, pulse jobs write deterministic fallback diaries and prompt files for review.
+
+## 7. Companion Memory, Graphs, And Observability
+
+The companion-memory overlay is derived from the canonical store:
+
+```text
+scripts/afterglow_companion_memory.py
+```
+
+It creates prompt-safe observations, daily/topic episodes, compact reflection markdown, and recall trace logs. `turn_context.py` and `fast_memory_recall.py` include those blocks when present.
+
+Related maintenance scripts:
+
+- `afterglow_relationship_refresh.py`: derives `relationship_edges` from active semantic facts and recent co-mentions.
+- `afterglow_prompt_leak_audit.py`: reports prompt-wrapper and operational-context contamination without deleting data.
+- `afterglow_eval_suite.py`: runs lightweight recall and database health checks.
+- `afterglow_recall_dashboard.py`: writes JSON suitable for a UI or external dashboard.
+- `rotate_afterglow_logs.py`: rotates large local audit and trace logs.
+
+See `docs/COMPANION_MEMORY.md` for the full design.

@@ -19,6 +19,11 @@ if str(SCRIPT_DIR) not in sys.path:
 import afterglow  # noqa: E402
 from afterglow_config import load_config  # noqa: E402
 
+try:
+    from afterglow_recall_dashboard import build as build_recall_dashboard
+except Exception:  # pragma: no cover - UI should still work if dashboard helper is unavailable
+    build_recall_dashboard = None  # type: ignore[assignment]
+
 
 WORKSPACE = afterglow.WORKSPACE
 BRAIN = afterglow.BRAIN
@@ -99,6 +104,16 @@ def api_tables() -> dict:
     return {"tables": out}
 
 
+def api_dashboard(refresh: bool = False) -> dict:
+    if build_recall_dashboard:
+        return build_recall_dashboard(refresh=refresh)
+    return {
+        "generated_at": afterglow.now_iso(),
+        "summary": api_summary(),
+        "error": "afterglow_recall_dashboard.py is unavailable",
+    }
+
+
 INDEX_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
@@ -172,6 +187,11 @@ INDEX_HTML = r"""<!doctype html>
         <div class="grid" id="stats"></div>
       </section>
       <section style="margin-top:16px">
+        <h2>Recall Observability</h2>
+        <div class="grid" id="observability"></div>
+        <div id="traceList"></div>
+      </section>
+      <section style="margin-top:16px">
         <h2>Recall Search</h2>
         <div class="search">
           <input id="query" placeholder="Search memory...">
@@ -194,10 +214,24 @@ INDEX_HTML = r"""<!doctype html>
       return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
     async function load() {
-      const [summary, emotion, diaries] = await Promise.all([get('/api/summary'), get('/api/emotion'), get('/api/diaries')]);
+      const [summary, emotion, diaries, dashboard] = await Promise.all([get('/api/summary'), get('/api/emotion'), get('/api/diaries'), get('/api/dashboard')]);
       document.getElementById('workspace').textContent = summary.workspace || '';
       const tables = summary.tables || {};
       document.getElementById('stats').innerHTML = Object.entries(tables).map(([k,v]) => `<div class="stat"><span class="muted">${esc(k)}</span><strong>${esc(v)}</strong></div>`).join('');
+      const companionCounts = dashboard.companion_layer_counts || {};
+      const leakCount = dashboard.prompt_leak_audit?.finding_count ?? 0;
+      const evalLast = dashboard.eval_last || {};
+      const observability = {
+        observations: companionCounts.companion_observations || 0,
+        episodes: companionCounts.companion_episodes || 0,
+        reflections: companionCounts.companion_reflections || 0,
+        relationship_edges: companionCounts.relationship_edges || 0,
+        prompt_leaks: leakCount,
+        eval_ok: evalLast.ok === undefined ? 'unknown' : String(evalLast.ok)
+      };
+      document.getElementById('observability').innerHTML = Object.entries(observability).map(([k,v]) => `<div class="stat"><span class="muted">${esc(k.replaceAll('_',' '))}</span><strong>${esc(v)}</strong></div>`).join('');
+      const traces = dashboard.recall_traces || [];
+      document.getElementById('traceList').innerHTML = traces.slice(0, 5).map(t => `<div class="item"><h3>${esc(t.mode || 'recall')} ${esc(t.elapsed_ms || 0)}ms</h3><p>${esc(t.query || '')}</p><p class="muted">${esc((t.top_results || []).map(r => r.id).join(', '))}</p></div>`).join('') || '<p class="muted">No recall traces yet.</p>';
       document.getElementById('pulse').textContent = JSON.stringify(summary.pulse_state || {}, null, 2);
       const drives = emotion.drives || {};
       document.getElementById('gauges').innerHTML = Object.entries(drives).map(([k,v]) => {
@@ -247,6 +281,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(api_summary())
             elif parsed.path == "/api/tables":
                 self.send_json(api_tables())
+            elif parsed.path == "/api/dashboard":
+                self.send_json(api_dashboard(qs.get("refresh", ["0"])[0] in {"1", "true", "yes"}))
             elif parsed.path == "/api/diaries":
                 self.send_json(api_diaries(int(qs.get("limit", ["30"])[0])))
             elif parsed.path == "/api/emotion":

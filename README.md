@@ -24,21 +24,25 @@ This repository is the public, sanitized starting point they wanted to share: no
 
 ## Latest Patch
 
-See `docs/CHANGELOG.md` for release notes. The 2026-06-09 patch upgrades semantic fact promotion with Hindsight++-style source metadata, duplicate skipping, system-prompt leak guards, and a promotion audit log.
+See `docs/CHANGELOG.md` for release notes. The 2026-06-10 patch adds companion-memory overlays, relationship graph refresh, recall trace logging, prompt-leak auditing, recall dashboard JSON, eval checks, and standalone log rotation.
 
 ## What It Provides
 
 - Local SQLite memory database with FTS recall.
 - Importers for OpenClaw sessions/local memory files and Hindsight JSON exports.
 - Semantic fact promotion for durable facts, with evidence metadata and prompt-leak guardrails.
+- Companion-memory overlays for observations, active episodes, relationship continuity, small-stuff context, and companion self-reflection.
 - Fast recall and deep recall tools.
+- Recall trace logging, prompt-leak auditing, eval checks, and dashboard JSON for memory observability.
 - `turn_context.py` for pre-message prompt injection.
 - Cross-session digest and recall from recent OpenClaw sessions.
 - Emotional state stored in `brain/soul_state.json` and rendered to prompt-safe markdown.
 - Autonomous pulse loop that updates drives and writes diary entries.
 - Fallback ingestion daemon that keeps indexing sessions if a hook misses a message.
-- Browser UI for memory stats, recall search, diaries, emotional gauges, and pulse state.
+- Browser UI for memory stats, recall search, diaries, emotional gauges, pulse state, and recall observability.
 - OpenClaw plugin that wires the system into `before_prompt_build`, `message_received`, and `message_sending`.
+
+For the design of the new overlay layer, see `docs/COMPANION_MEMORY.md`.
 
 ## Step-By-Step Setup
 

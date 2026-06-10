@@ -143,6 +143,17 @@ def write_afterglow_config(workspace: Path, args: argparse.Namespace) -> Path:
                 "quiet_hours_start": 22,
                 "quiet_hours_end": 7,
             },
+            "companion_memory": {
+                "enabled": True,
+                "observation_scan_limit": 6000,
+                "episode_days": 21,
+                "small_stuff_limit": 12,
+                "relationship_edge_days": 30,
+                "relationship_core_entities": [],
+                "custom_relationship_predicates": [],
+                "prompt_leak_quarantine": True,
+                "trace_recall": True,
+            },
             "ui": {"host": "127.0.0.1", "port": args.ui_port},
         }
     )
@@ -199,6 +210,9 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
         )
         imported = {**(imported or {}), "hindsight": rc}
 
+    companion_overlay = run_python(workspace / "scripts" / "afterglow_companion_memory.py", ["rebuild"], workspace, state_dir)
+    relationship_graph = run_python(workspace / "scripts" / "afterglow_relationship_refresh.py", [], workspace, state_dir)
+
     return {
         "state_dir": str(state_dir),
         "workspace": str(workspace),
@@ -208,6 +222,8 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
         "plugin_state_path": str(state_dir / "plugins" / "afterglow-memory"),
         "plugin_workspace_path": str(workspace / "plugins" / "afterglow-memory"),
         "imported": imported,
+        "companion_overlay": companion_overlay,
+        "relationship_graph": relationship_graph,
     }
 
 
@@ -262,6 +278,8 @@ def main() -> int:
     print()
     print("Next commands:")
     print(f"  python \"{Path(result['workspace']) / 'scripts' / 'afterglow.py'}\" summary")
+    print(f"  python \"{Path(result['workspace']) / 'scripts' / 'afterglow_companion_memory.py'}\" rebuild --json")
+    print(f"  python \"{Path(result['workspace']) / 'scripts' / 'afterglow_recall_dashboard.py'}\" --json")
     print(f"  python \"{Path(result['workspace']) / 'scripts' / 'turn_context.py'}\" \"recent important context\" --compact")
     print(f"  python \"{Path(result['workspace']) / 'scripts' / 'ui_server.py'}\"")
     return 0

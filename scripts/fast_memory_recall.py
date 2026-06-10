@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import time
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -13,12 +14,19 @@ if str(SCRIPT_DIR) not in sys.path:
 
 import afterglow  # noqa: E402
 
+try:
+    from afterglow_companion_memory import core_memory_blocks, rebuild_all, record_recall_trace
+except Exception:  # pragma: no cover - optional companion overlay must never block recall
+    core_memory_blocks = None  # type: ignore[assignment]
+    rebuild_all = None  # type: ignore[assignment]
+    record_recall_trace = None  # type: ignore[assignment]
+
 
 OUTPUT_PATH = afterglow.BRAIN / "afterglow_prompt_recall.md"
 
 
-def render(query: str, limit: int) -> str:
-    results = afterglow.semantic_recall(query, limit=limit)
+def render(query: str, limit: int, results: list[dict] | None = None) -> str:
+    results = results if results is not None else afterglow.semantic_recall(query, limit=limit)
     context = afterglow.build_response_context([query], limit=min(limit, 6))
     lines = [
         f'## Afterglow Fast Recall for "{query}"',
@@ -46,6 +54,13 @@ def render(query: str, limit: int) -> str:
                 f"- {mem.get('evidence')} {mem.get('type')} "
                 f"score={mem.get('score')} when={mem.get('timestamp')}: {mem.get('text')}"
             )
+    if core_memory_blocks:
+        try:
+            block = core_memory_blocks(query, limit=min(limit, 8))
+        except Exception as exc:
+            block = f"## Companion Memory Overlay\n(unavailable: {exc})"
+        if block:
+            lines.extend(["", block])
     return "\n".join(lines).strip() + "\n"
 
 
@@ -55,19 +70,39 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--no-write", action="store_true")
+    parser.add_argument("--rebuild-companion", action="store_true", help="Rebuild companion overlays before recall")
     args = parser.parse_args()
 
+    if args.rebuild_companion and rebuild_all:
+        rebuild_all()
+
+    started = time.perf_counter()
+    results = afterglow.semantic_recall(args.query, limit=args.limit)
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    if record_recall_trace:
+        try:
+            record_recall_trace(args.query, results, elapsed_ms, mode="fast_memory_recall")
+        except Exception:
+            pass
+
     if args.json:
-        results = afterglow.semantic_recall(args.query, limit=args.limit)
+        overlay = ""
+        if core_memory_blocks:
+            try:
+                overlay = core_memory_blocks(args.query, limit=min(args.limit, 8))
+            except Exception:
+                overlay = ""
         payload = {
             "query": args.query,
             "generated_at": afterglow.now_iso(),
             "lane": "local_sqlite_fts",
+            "elapsed_ms": round(elapsed_ms, 1),
             "results": results,
+            "companion_overlay": overlay,
         }
         text = json.dumps(payload, indent=2, ensure_ascii=False)
     else:
-        text = render(args.query, args.limit)
+        text = render(args.query, args.limit, results=results)
 
     if not args.no_write:
         OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
